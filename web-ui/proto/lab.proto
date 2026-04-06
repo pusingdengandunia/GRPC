@@ -1,0 +1,45 @@
+//KONTRAK KOMUNIKASI ANTAR SERVICE
+syntax = "proto3";
+
+package lab;
+option go_package = "./pb";
+
+service LabService {
+  // Unary: Mahasiswa request lingkungan baru
+  rpc RequestEnvironment(EnvRequest) returns (EnvResponse);
+
+  // Server-side Streaming: Update progress provisioning
+  rpc MonitorProvisioning(ProvisionJob) returns (stream LogUpdate);
+
+  // Client-side Streaming: Agent lapor metrik secara berkala
+  rpc ReportMetrics(stream ServerMetric) returns (MetricAck);
+}
+
+message EnvRequest {
+  string student_id = 1;
+  string env_type = 2; // e.g., "DataScience_Python"
+}
+
+message EnvResponse {
+  string job_id = 1;
+  string message = 2;
+}
+
+message ProvisionJob {
+  string job_id = 1;
+}
+
+message LogUpdate {
+  int32 progress = 1;
+  string status = 2;
+}
+
+message ServerMetric {
+  string server_id = 1;
+  float cpu_usage = 2;
+  float ram_usage = 3;
+}
+
+message MetricAck {
+  string message = 1;
+}
