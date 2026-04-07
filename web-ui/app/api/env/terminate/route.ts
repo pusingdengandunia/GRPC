@@ -4,21 +4,20 @@ import { grpcClient } from '@/lib/grpc';
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { student_id, env_type, purpose } = body;
+    const { job_id } = body;
 
-    if (!student_id || !env_type) {
+    if (!job_id) {
       return NextResponse.json(
-        { error: 'Missing student_id or env_type' },
+        { error: 'Missing job_id' },
         { status: 400 }
       );
     }
 
-    return new Promise((resolve, reject) => {
-      grpcClient.RequestEnvironment(
-        { student_id, env_type, purpose: purpose || 'umum' },
+    return new Promise((resolve) => {
+      grpcClient.TerminateEnvironment(
+        { job_id },
         (error: any, response: any) => {
           if (error) {
-            console.error('gRPC error:', error);
             resolve(
               NextResponse.json(
                 { error: error.message },

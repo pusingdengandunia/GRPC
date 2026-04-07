@@ -13,11 +13,35 @@ service LabService {
 
   // Client-side Streaming: Agent lapor metrik secara berkala
   rpc ReportMetrics(stream ServerMetric) returns (MetricAck);
+
+  // Unary: Status seluruh agent
+  rpc GetLabStatus(Empty) returns (LabStatusResponse);
+
+  // Unary: Hapus environment
+  rpc TerminateEnvironment(TerminateRequest) returns (TerminateResponse);
+}
+
+message Empty {}
+
+message ActiveJob {
+  string job_id = 1;
+  string student_id = 2;
+  string env_type = 3;
+  string purpose = 4;
+  string status = 5;
+  string start_time = 6;
+}
+
+message LabStatusResponse {
+  float available_cpu = 1;
+  float available_ram = 2;
+  repeated ActiveJob active_jobs = 3;
 }
 
 message EnvRequest {
   string student_id = 1;
-  string env_type = 2; // e.g., "DataScience_Python"
+  string env_type = 2;
+  string purpose = 3; // e.g., "DataScience_Python"
 }
 
 message EnvResponse {
@@ -41,5 +65,12 @@ message ServerMetric {
 }
 
 message MetricAck {
+  string message = 1;
+}
+message TerminateRequest {
+  string job_id = 1;
+}
+
+message TerminateResponse {
   string message = 1;
 }

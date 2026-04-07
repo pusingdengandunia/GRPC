@@ -2,11 +2,28 @@
 
 import { useState, useEffect } from 'react';
 
+interface ActiveEnv {
+  jobId: string;
+  studentId: string;
+  envType: string;
+  purpose: string;
+  status: string;
+  startTime: string;
+}
+
 export default function Home() {
-  const [studentId, setStudentId] = useState('NIM12345');
-  const [envType, setEnvType] = useState('DataScience_Python');
+  const [studentId, setStudentId] = useState('');
+  const [envType, setEnvType] = useState('');
+  const [purpose, setPurpose] = useState('');
   const [jobId, setJobId] = useState('');
   const [unaryResponse, setUnaryResponse] = useState('');
+  
+  const [labState, setLabState] = useState<{availableCpu: number, availableRam: number, activeJobs: ActiveEnv[]}>({
+    availableCpu: 16,
+    availableRam: 64,
+    activeJobs: []
+  });
+
   
   const [logs, setLogs] = useState<string[]>([]);
   const [isProvisioning, setIsProvisioning] = useState(false);
@@ -19,9 +36,30 @@ export default function Home() {
   useEffect(() => {
     const checkStatus = async () => {
       try {
-        const res = await fetch('/api/status', { cache: 'no-store' });
-        const data = await res.json();
-        setServerStatus(data.status === 'online' ? 'online' : 'offline');
+        const [sysRes, labRes] = await Promise.all([
+          fetch('/api/status', { cache: 'no-store' }),
+          fetch('/api/lab/status', { cache: 'no-store' })
+        ]);
+        
+        const sysData = await sysRes.json();
+        setServerStatus(sysData.status === 'online' ? 'online' : 'offline');
+
+        if (labRes.ok) {
+          const labData = await labRes.json();
+          // transform protobuf response slightly (handle snake_case payload):
+          setLabState({
+            availableCpu: labData.availableCpu ?? labData.available_cpu ?? 0,
+            availableRam: labData.availableRam ?? labData.available_ram ?? 0,
+            activeJobs: (labData.activeJobs || labData.active_jobs || []).map((job: any) => ({
+                jobId: job.jobId || job.job_id,
+                studentId: job.studentId || job.student_id,
+                envType: job.envType || job.env_type,
+                purpose: job.purpose,
+                status: job.status,
+                startTime: job.startTime || job.start_time
+            }))
+          });
+        }
       } catch (err) {
         setServerStatus('offline');
       }
@@ -40,7 +78,7 @@ export default function Home() {
       const res = await fetch('/api/env/request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ student_id: studentId, env_type: envType }),
+        body: JSON.stringify({ student_id: studentId, env_type: envType, purpose: purpose }),
       });
       const data = await res.json();
       // Perhatikan: properti dari JSON menggunakan snake_case `job_id` sesuai definisi gRPC/Protobuf
@@ -125,15 +163,37 @@ export default function Home() {
     }
   };
 
+  const terminateEnvironment = async (idToTerminate: string) => {
+    if (!idToTerminate) return alert("Pilih JobID yang akan dihapus.");
+    if (!confirm(`Yakin ingin menyetop dan membebaskan resource Env ${idToTerminate}?`)) return;
+
+    try {
+      const res = await fetch('/api/env/terminate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_id: idToTerminate }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        alert(data.message);
+        if (jobId === idToTerminate) setJobId('');
+      } else {
+        alert(`Gagal Terminate: ${data.error}`);
+      }
+    } catch (err: any) {
+      alert(`Koneksi Gagal: ${err.message}`);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-900 text-slate-200 font-sans selection:bg-indigo-500 selection:text-white">
       {/* Header Navbar */}
       <header className="bg-slate-950 border-b border-slate-800 shadow-sm sticky top-0 z-10 px-8 py-5">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-indigo-600 rounded-lg flex items-center justify-center text-white font-bold text-xl shadow-lg shadow-indigo-600/30">g</div>
+            <div className="w-10 h-10 bg-indigo-600 rounded-lg flex items-center justify-center text-white font-bold text-xl shadow-lg shadow-indigo-600/30">IT</div>
             <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 to-cyan-400 tracking-tight">
-              gRPC Lab Simulator
+              IT LaaS
             </h1>
           </div>
           <div className="flex items-center gap-3 transition-colors duration-300">
@@ -197,11 +257,30 @@ export default function Home() {
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1.5 uppercase tracking-wide">Environment / Image</label>
-                  <input 
-                    className="w-full bg-slate-900/50 border border-slate-700 text-slate-200 px-4 py-2.5 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 transition-colors" 
+                  <select 
+                    className="w-full bg-slate-900/50 border border-slate-700 text-slate-200 px-4 py-2.5 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 transition-colors appearance-none" 
                     value={envType} onChange={(e) => setEnvType(e.target.value)} 
-                    placeholder="Contoh: DataScience_Python"
-                  />
+                  >
+                    <option value="" disabled>Pilih Environment...</option>
+                    <option value="DataScience_Python">DataScience_Python - 2 CPU, 4GB RAM (Jupyter, Pandas, Sklearn)</option>
+                    <option value="Database_MySQL">Database_MySQL - 1 CPU, 2GB RAM (MySQL, phpMyAdmin)</option>
+                    <option value="WebServer_NodeJS">WebServer_NodeJS - 1 CPU, 1GB RAM (NodeJS, npm, Apache/Nginx)</option>
+                    <option value="Network_Lab">Network_Lab - 2 CPU, 2GB RAM (Wireshark, GNS3)</option>
+                    <option value="FullStack_Dev">FullStack_Dev - 4 CPU, 8GB RAM (Docker, Nginx)</option>
+                    <option value="ML_Training">ML_Training - 4 CPU, 16GB RAM (TensorFlow, PyTorch, CUDA)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1.5 uppercase tracking-wide">Tujuan / Prioritas</label>
+                  <select 
+                    className="w-full bg-slate-900/50 border border-slate-700 text-slate-200 px-4 py-2.5 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 transition-colors appearance-none" 
+                    value={purpose} onChange={(e) => setPurpose(e.target.value)} 
+                  >
+                    <option value="" disabled>Pilih Prioritas...</option>
+                    <option value="tugas_akhir">Tugas Akhir (Prioritas Tinggi)</option>
+                    <option value="praktikum">Praktikum (Prioritas Sedang)</option>
+                    <option value="umum">Umum (Prioritas Rendah)</option>
+                  </select>
                 </div>
               </div>
               
@@ -238,18 +317,28 @@ export default function Home() {
               
               <div className="mb-6">
                 <label className="block text-xs font-semibold text-slate-300 mb-1.5 uppercase tracking-wide">Target Job ID</label>
-                <div className="flex gap-3">
+                <div className="flex flex-col sm:flex-row gap-3">
                   <input 
                     className="flex-1 bg-slate-900 border border-slate-700 text-slate-400 px-4 py-2.5 rounded-lg cursor-not-allowed font-mono" 
                     value={jobId} readOnly placeholder="Belum ada Job ID (Request Unary dulu)"
                   />
-                  <button 
-                    className="bg-teal-600 hover:bg-teal-500 text-white shadow-lg shadow-teal-600/20 py-2.5 px-5 rounded-lg font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98] whitespace-nowrap"
-                    onClick={monitorProvisioning}
-                    disabled={isProvisioning || !jobId}
-                  >
-                    {isProvisioning ? 'Listening...' : 'Mulai Stream'}
-                  </button>
+                  <div className="flex gap-2">
+                    <button 
+                      className="flex-1 sm:flex-none border border-teal-600/30 bg-teal-600/10 hover:bg-teal-500 text-white shadow-lg shadow-teal-600/20 py-2.5 px-5 rounded-lg font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98] whitespace-nowrap"
+                      onClick={monitorProvisioning}
+                      disabled={isProvisioning || !jobId}
+                    >
+                      {isProvisioning ? 'Listening...' : 'Mulai Stream'}
+                    </button>
+                    <button 
+                      className="border border-red-800/50 bg-red-900/20 hover:bg-red-600 text-white shadow-lg shadow-red-900/20 py-2.5 px-4 rounded-lg font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98]"
+                      onClick={() => terminateEnvironment(jobId)}
+                      disabled={!jobId}
+                      title="Matikan Env. Ini & Bersihkan Resource"
+                    >
+                      Hapus
+                    </button>
+                  </div>
                 </div>
               </div>
               
@@ -348,6 +437,81 @@ export default function Home() {
             </div>
           </div>
           
+          {/* Card 4: Active Environments List */}
+          <div className="bg-slate-800/50 backdrop-blur-md rounded-2xl border border-slate-700/50 overflow-hidden shadow-xl lg:col-span-2 flex flex-col">
+            <div className="bg-slate-800/80 px-6 py-4 border-b border-slate-700/50 flex flex-col sm:flex-row justify-between sm:items-center gap-3">
+              <h2 className="text-lg font-semibold text-slate-100 flex items-center gap-2">
+                <div className="p-1.5 bg-blue-500/20 rounded text-blue-400">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" /></svg>
+                </div>
+                Real-time Server State
+              </h2>
+              <div className="flex gap-4 items-center bg-slate-950 px-4 py-2 rounded-lg border border-slate-800">
+                <div className="text-sm">
+                  <span className="text-slate-400 uppercase text-[10px] font-bold tracking-widest block mb-0.5">Avail. CPU</span>
+                  <span className="text-emerald-400 font-mono font-bold">{labState.availableCpu.toFixed(1)} / 16.0</span>
+                </div>
+                <div className="w-px h-6 bg-slate-800"></div>
+                <div className="text-sm">
+                  <span className="text-slate-400 uppercase text-[10px] font-bold tracking-widest block mb-0.5">Avail. RAM</span>
+                  <span className="text-cyan-400 font-mono font-bold">{labState.availableRam.toFixed(1)} / 64.0</span>
+                </div>
+              </div>
+            </div>
+            <div className="p-6">
+              {labState.activeJobs.length === 0 ? (
+                <div className="text-center text-slate-500 py-8 italic border border-dashed border-slate-700/50 rounded-xl">
+                  Tidak ada job aktif di server saat ini.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-sm border-collapse">
+                    <thead>
+                      <tr className="border-b border-slate-700/50 text-slate-400 uppercase tracking-wide text-xs">
+                        <th className="pb-3 px-4 font-semibold">Tujuan</th>
+                        <th className="pb-3 px-4 font-semibold">JobID</th>
+                        <th className="pb-3 px-4 font-semibold">Mahasiswa</th>
+                        <th className="pb-3 px-4 font-semibold">Status / Waktu</th>
+                        <th className="pb-3 px-4 font-semibold text-right">Aksi</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/80">
+                      {labState.activeJobs.map((env) => (
+                        <tr key={env.jobId} className="hover:bg-slate-800/30 transition-colors">
+                          <td className="py-4 px-4 text-slate-400 capitalize">{env.purpose.replace('_', ' ')}</td>
+                          <td className="py-4 px-4 font-mono text-indigo-300">{env.jobId}</td>
+                          <td className="py-4 px-4 text-slate-300">{env.studentId}</td>
+                          <td className="py-4 px-4">
+                            <div className="flex flex-col gap-1">
+                              <span className={`inline-flex w-fit px-2 py-0.5 rounded text-xs font-semibold ${env.status === 'Running' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30'}`}>
+                                {env.status}
+                              </span>
+                              <span className="text-[10px] text-slate-500 font-mono" title={env.startTime}>{new Date(env.startTime).toLocaleTimeString()}</span>
+                            </div>
+                          </td>
+                          <td className="py-4 px-4 flex justify-end gap-2">
+                            <button 
+                              className="bg-indigo-600/20 text-indigo-400 hover:bg-indigo-500 hover:text-white border border-indigo-600/30 px-3 py-1.5 rounded-lg transition-all text-xs font-semibold"
+                              onClick={() => setJobId(env.jobId)}
+                            >
+                              Log
+                            </button>
+                            <button 
+                              className="bg-red-900/20 text-red-400 hover:bg-red-600 hover:text-white border border-red-800/50 px-3 py-1.5 rounded-lg transition-all text-xs font-semibold"
+                              onClick={() => terminateEnvironment(env.jobId)}
+                            >
+                              Hapus
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+
         </div>
       </main>
     </div>
