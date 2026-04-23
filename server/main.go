@@ -53,7 +53,7 @@ type labServer struct {
 	availableRam float32
 	mu           sync.Mutex
 	jobs         map[string]*JobData
-	queue        []*JobData // Antrean job (Scheduler)
+	queue        []*JobData
 }
 
 func getPriorityWeight(purpose string) int {
@@ -101,7 +101,7 @@ func (s *labServer) processQueue() {
 			// Coba alokasikan job top-priority jika muat
 			topJob := s.queue[0]
 			if s.availableCpu >= topJob.Config.CPU && s.availableRam >= topJob.Config.RAM {
-				log.Printf("[SCHEDULER] Job %s (Prioritas: %s) keluar antrean & dialokasikan!", topJob.ID, topJob.Purpose)
+				log.Printf("[SCHEDULER] Job %s (Prioritas: %s) dialokasikan terlebih dahulu!", topJob.ID, topJob.Purpose)
 				s.availableCpu -= topJob.Config.CPU
 				s.availableRam -= topJob.Config.RAM
 				topJob.Status = "Running"
@@ -128,10 +128,10 @@ func (s *labServer) RequestEnvironment(ctx context.Context, req *pb.EnvRequest) 
 
 	// Jika concurrent env melebihi 50 atau antrean lebih dari 5, tolak ResourceExhausted
 	if len(s.jobs) >= 50 {
-		return nil, status.Errorf(codes.ResourceExhausted, "Resource Exhausted: Kuota server lab penuh(max 50 concurrent env)!")
+		return nil, status.Errorf(codes.ResourceExhausted, "Resource Exhausted: Kuota server lab penuh!")
 	}
 	if len(s.queue) >= 5 {
-		return nil, status.Errorf(codes.ResourceExhausted, "Resource Exhausted: Server terlalu sibuk, antrean penuh (Maks 5)!")
+		return nil, status.Errorf(codes.ResourceExhausted, "Resource Exhausted: Server terlalu sibuk!")
 	}
 	
 	var finalStatus string
@@ -163,20 +163,20 @@ func (s *labServer) RequestEnvironment(ctx context.Context, req *pb.EnvRequest) 
 	}
 
 	go func(id string, c EnvConfig) {
-		time.Sleep(30 * time.Second)
+		time.Sleep(120 * time.Second)
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		if job, ok := s.jobs[id]; ok && job.Status == "Running" {
 			s.availableCpu += c.CPU
 			s.availableRam += c.RAM
 			delete(s.jobs, id)
-			log.Printf("[CLEANUP-TIMERS] Environment %s kedaluwarsa setelah 30 detik. Dihapus.", id)
+			log.Printf("[CLEANUP-TIMERS] Environment %s kedaluwarsa setelah 2 menit. Dihapus.", id)
 		} else if ok {
 			delete(s.jobs, id)
 		}
 	}(jobID, config)
 
-	message := fmt.Sprintf("Direkam! %s. Status: %s. Tujuan: %s", req.EnvType, finalStatus, req.Purpose)
+	message := fmt.Sprintf("Dijadwalkan! %s. Status: %s. Tujuan: %s", req.EnvType, finalStatus, req.Purpose)
 	return &pb.EnvResponse{
 		JobId:   jobID,
 		Message: message,
@@ -279,7 +279,7 @@ func (s *labServer) ReportMetrics(stream pb.LabService_ReportMetricsServer) erro
 		if err != nil {
 			return stream.SendAndClose(&pb.MetricAck{Message: "Stream ditutup"})
 		}		
-		log.Printf("[METRIC] Server Agent %s melapor utilisasi: CPU %.2f%% | RAM %.2f%%", metric.ServerId, metric.CpuUsage, metric.RamUsage)
+		log.Printf("[METRIC] Server Agent %s : CPU %.2f%% | RAM %.2f%%", metric.ServerId, metric.CpuUsage, metric.RamUsage)
 	}
 }
 

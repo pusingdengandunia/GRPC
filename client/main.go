@@ -1,67 +1,90 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"fmt"
 	"log"
-	"math/rand"
-	"time"
+	"os"
+	"strings"
 
-	"grpc-lab/pb"
+	"grpc-lab/pb" // Sesuaikan path
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
 func main() {
-	conn, err := grpc.NewClient("localhost:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.Dial("localhost:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Gagal terhubung: %v", err)
 	}
 	defer conn.Close()
-
-	//inisialisasi client
 	client := pb.NewLabServiceClient(conn)
+	reader := bufio.NewReader(os.Stdin)
 
-	// Simulasi pengiriman metrik secara kontinyu (Client-side Streaming)
-	stream, err := client.ReportMetrics(context.Background())
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	//provisioning agent simulasi
-	go func() {
-		for {
-			metric := &pb.ServerMetric{
-				ServerId: "LAB-RUM-01",
-				CpuUsage: rand.Float32() * 100,
-				RamUsage: rand.Float32() * 100,
-			}
-			stream.Send(metric)
-			time.Sleep(5 * time.Second)
-		}
-	}()
-
-	// Simulasi alur mahasiswa
-	// 1. Request
-	res, err := client.RequestEnvironment(context.Background(), &pb.EnvRequest{
-		StudentId: "NIM12345",
-		EnvType:   "DataScience_Python",
-	})
-	if err != nil {
-		log.Fatalf("Gagal melakukan request environment: %v", err)
-	}
-	log.Printf("Job Created: %s", res.JobId)
-
-	// 2. Monitor Progress
-	logStream, err := client.MonitorProvisioning(context.Background(), &pb.ProvisionJob{JobId: res.JobId})
-	if err != nil {
-		log.Fatalf("Gagal memonitor log provisioning: %v", err)
-	}
 	for {
-		update, err := logStream.Recv()
-		if err != nil {
-			break
+		fmt.Println("\n=== 🛠️ Kampus Lab-as-a-Service CLI ===")
+		fmt.Println("1. Request Environment Baru")
+		fmt.Println("2. Cek Status Lab")
+		fmt.Println("3. Terminate Environment")
+		fmt.Println("0. Keluar")
+		fmt.Print("Pilih menu: ")
+
+		var choice int
+		fmt.Scanln(&choice)
+
+		switch choice {
+		case 1:
+			fmt.Print("Masukkan Student ID: ")
+			studentID, _ := reader.ReadString('\n')
+			
+			fmt.Println("Pilihan Env: DataScience_Python, Database_MySQL, WebServer_NodeJS, Network_Lab, FullStack_Dev, ML_Training")
+			fmt.Print("Masukkan Env Type: ")
+			envType, _ := reader.ReadString('\n')
+			
+			fmt.Println("Pilihan Tujuan: tugas_akhir, praktikum, umum")
+			fmt.Print("Masukkan Tujuan (Purpose): ")
+			purpose, _ := reader.ReadString('\n')
+
+			req := &pb.EnvRequest{
+				StudentId: strings.TrimSpace(studentID),
+				EnvType:   strings.TrimSpace(envType),
+				Purpose:   strings.TrimSpace(purpose),
+			}
+			res, err := client.RequestEnvironment(context.Background(), req)
+			if err != nil {
+				fmt.Printf("❌ Error: %v\n", err)
+			} else {
+				fmt.Printf("✅ %s (Job ID: %s)\n", res.Message, res.JobId)
+			}
+
+		case 2:
+			res, err := client.GetLabStatus(context.Background(), &pb.Empty{})
+			if err != nil {
+				fmt.Printf("❌ Error: %v\n", err)
+				continue
+			}
+			fmt.Printf("📊 Sisa Resource -> CPU: %.1f, RAM: %.1f GB\n", res.AvailableCpu, res.AvailableRam)
+			for _, job := range res.ActiveJobs {
+				fmt.Printf("   - [%s] %s (%s) | Status: %s\n", job.JobId, job.EnvType, job.StudentId, job.Status)
+			}
+
+		case 3:
+			fmt.Print("Masukkan Job ID yang ingin di-terminate: ")
+			jobID, _ := reader.ReadString('\n')
+			res, err := client.TerminateEnvironment(context.Background(), &pb.TerminateRequest{JobId: strings.TrimSpace(jobID)})
+			if err != nil {
+				fmt.Printf("❌ Error: %v\n", err)
+			} else {
+				fmt.Printf("✅ %s\n", res.Message)
+			}
+
+		case 0:
+			fmt.Println("Keluar dari sistem.")
+			return
+		default:
+			fmt.Println("Pilihan tidak valid.")
 		}
-		log.Printf("[%d%%] %s", update.Progress, update.Status)
 	}
 }
