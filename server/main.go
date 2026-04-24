@@ -13,6 +13,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -67,6 +68,28 @@ func getPriorityWeight(purpose string) int {
 	}
 }
 
+func getStudentIDFromAuth(ctx context.Context) (string, error) {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return "", status.Errorf(codes.Unauthenticated, "Metadata tidak ditemukan. Harap login.")
+	}
+	
+	tokens := md.Get("authorization")
+	if len(tokens) == 0 {
+		return "", status.Errorf(codes.Unauthenticated, "Token otorisasi tidak ditemukan.")
+	}
+
+	// Dalam skenario nyata, di sini kamu men-decode JWT Token.
+	// Untuk simulasi, kita anggap tokennya berisi langsung "Bearer <student_id>"
+	tokenString := tokens[0]
+	if len(tokenString) > 7 && tokenString[:7] == "Bearer " {
+		return tokenString[7:], nil // Mengembalikan student_id
+	}
+
+	return "", status.Errorf(codes.Unauthenticated, "Format token tidak valid.")
+}
+
+
 // Background Worker Scheduler (Otak Penjadwalan)
 func (s *labServer) processQueue() {
 	for {
@@ -113,7 +136,14 @@ func (s *labServer) processQueue() {
 }
 
 func (s *labServer) RequestEnvironment(ctx context.Context, req *pb.EnvRequest) (*pb.EnvResponse, error) {
+	// 1. Cek Autentikasi
+	studentID, err := getStudentIDFromAuth(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	config, ok := envDefinitions[req.EnvType]
+
 	if !ok {
 		return nil, status.Errorf(codes.InvalidArgument, "Konfigurasi environment '%s' tidak ditemukan.", req.EnvType)
 	}
@@ -146,11 +176,11 @@ func (s *labServer) RequestEnvironment(ctx context.Context, req *pb.EnvRequest) 
 	}
 
 	jobID := fmt.Sprintf("JOB-%d", rand.Intn(10000))
-	log.Printf("[REQ IN] %s | Env: %s | CPU: %.1f | RAM: %.1f | Purpose: %s | Action: %s", req.StudentId, req.EnvType, config.CPU, config.RAM, req.Purpose, finalStatus)
+	log.Printf("[REQ IN] %s | Env: %s | CPU: %.1f | RAM: %.1f | Purpose: %s | Action: %s", studentID, req.EnvType, config.CPU, config.RAM, req.Purpose, finalStatus)
 
 	jobData := &JobData{
 		ID:        jobID,
-		StudentId: req.StudentId,
+		StudentId: studentID,
 		Purpose:   req.Purpose,
 		Env:       req.EnvType,
 		Config:    config,
@@ -180,6 +210,84 @@ func (s *labServer) RequestEnvironment(ctx context.Context, req *pb.EnvRequest) 
 	return &pb.EnvResponse{
 		JobId:   jobID,
 		Message: message,
+	}, nil
+}
+
+
+func (s *labServer) TerminateEnvironment(ctx context.Context, req *pb.TerminateRequest) (*pb.TerminateResponse, error) {
+	studentID, err := getStudentIDFromAuth(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	job, ok := s.jobs[req.JobId]
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "Job tidak ditemukan")
+	}
+
+	// 2. Otorisasi: Pastikan yang mau menghapus adalah pemiliknya
+	if job.StudentId != studentID {
+		return nil, status.Errorf(codes.PermissionDenied, "Akses ditolak! Anda bukan pemilik environment ini.")
+	}
+
+	if job.Status == "Running" {
+		s.availableCpu += job.Config.CPU
+		s.availableRam += job.Config.RAM
+	}
+	
+	delete(s.jobs, req.JobId)
+	log.Printf("[TERMINATE] Job %s milik %s dihapus.", req.JobId, studentID)
+
+	return &pb.TerminateResponse{Message: "Environment berhasil dimatikan."}, nil
+}
+
+
+func (s *labServer) ScaleEnvironment(ctx context.Context, req *pb.ScaleRequest) (*pb.ScaleResponse, error) {
+	studentID, err := getStudentIDFromAuth(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	job, ok := s.jobs[req.JobId]
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "Job tidak ditemukan")
+	}
+
+	// Pastikan hanya pemilik yang bisa melakukan scaling
+	if job.StudentId != studentID {
+		return nil, status.Errorf(codes.PermissionDenied, "Akses ditolak! Anda bukan pemilik environment ini.")
+	}
+
+	if job.Status != "Running" {
+		return nil, status.Errorf(codes.FailedPrecondition, "Scaling hanya bisa dilakukan pada environment yang sedang berjalan.")
+	}
+
+	// Hitung selisih resource
+	cpuDiff := req.NewCpu - job.Config.CPU
+	ramDiff := req.NewRam - job.Config.RAM
+
+	// Jika Scale UP (menambah resource), cek apakah kapasitas server cukup
+	if (cpuDiff > 0 && s.availableCpu < cpuDiff) || (ramDiff > 0 && s.availableRam < ramDiff) {
+		return nil, status.Errorf(codes.ResourceExhausted, "Gagal Scale Up: Kapasitas server tidak mencukupi saat ini.")
+	}
+
+	// Terapkan perubahan
+	s.availableCpu -= cpuDiff
+	s.availableRam -= ramDiff
+	job.Config.CPU = req.NewCpu
+	job.Config.RAM = req.NewRam
+
+	log.Printf("[SCALING] Job %s diubah menjadi CPU: %.1f, RAM: %.1f", req.JobId, req.NewCpu, req.NewRam)
+
+	return &pb.ScaleResponse{
+		Message: fmt.Sprintf("Berhasil melakukan scaling! CPU: %.1f, RAM: %.1f", req.NewCpu, req.NewRam),
+		Success: true,
 	}, nil
 }
 
@@ -249,29 +357,7 @@ func (s *labServer) MonitorProvisioning(req *pb.ProvisionJob, stream pb.LabServi
 	return nil
 }
 
-func (s *labServer) TerminateEnvironment(ctx context.Context, req *pb.TerminateRequest) (*pb.TerminateResponse, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
-	job, ok := s.jobs[req.JobId]
-	if !ok {
-		return nil, status.Errorf(codes.NotFound, "EnvID tidak ada atau sudah kadaluarsa")
-	}
-
-	// Kembalikan resource jika job tersebut sudah berlari memakan resource aktif
-	if job.Status == "Running" {
-		s.availableCpu += job.Config.CPU
-		s.availableRam += job.Config.RAM
-	}
-	
-	// Hapus dari mapping langsung
-	delete(s.jobs, req.JobId)
-	log.Printf("[TERMINATE] Job %s dihapus paksa. Resource dikembalikan. CPU: %.2f | RAM: %.2f", req.JobId, s.availableCpu, s.availableRam)
-
-	return &pb.TerminateResponse{
-		Message: fmt.Sprintf("[%s] Environment berhasil dimatikan dan resource dikembalikan", req.JobId),
-	}, nil
-}
 
 func (s *labServer) ReportMetrics(stream pb.LabService_ReportMetricsServer) error {
 	for {

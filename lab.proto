@@ -13,11 +13,14 @@ service LabService {
   // Client-side Streaming: Agent lapor metrik secara berkala
   rpc ReportMetrics(stream ServerMetric) returns (MetricAck);
 
-  // Unary: Status seluruh agent
+  // Unary: Status seluruh agent (Publik)
   rpc GetLabStatus(Empty) returns (LabStatusResponse);
 
-  // Unary: Hapus environment
+  // Unary: Hapus environment (Privat - butuh Auth)
   rpc TerminateEnvironment(TerminateRequest) returns (TerminateResponse);
+
+  // Unary: Scale up/down resource (Privat - butuh Auth)
+  rpc ScaleEnvironment(ScaleRequest) returns (ScaleResponse);
 }
 
 message Empty {}
@@ -37,10 +40,20 @@ message LabStatusResponse {
   repeated ActiveJob active_jobs = 3;
 }
 
+message ScaleRequest {
+  string job_id = 1;
+  float new_cpu = 2;
+  float new_ram = 3;
+}
+
+message ScaleResponse {
+  string message = 1;
+  bool success = 2;
+}
+
 message EnvRequest {
-  string student_id = 1;
-  string env_type = 2;
-  string purpose = 3; 
+  string env_type = 1;
+  string purpose = 2; 
 }
 
 message EnvResponse {
