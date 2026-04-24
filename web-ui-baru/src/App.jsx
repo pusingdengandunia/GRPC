@@ -22,6 +22,49 @@ const PURPOSE_OPTIONS = [
   { value: 'umum', label: 'Umum', priority: 'Prioritas Rendah - Bobot 1' },
 ];
 
+function ContinuousChart({ data, dataKey, color, label }) {
+  const width = 300;
+  const height = 80;
+  const maxPoints = 30;
+  
+  if (!data || data.length < 2) {
+    return <div className="chart-loading">Waiting for data...</div>;
+  }
+
+  // Generate path for line
+  const points = data.map((d, i) => {
+    const x = (i / (maxPoints - 1)) * width;
+    const val = d[dataKey] || 0;
+    const y = height - (val / 100) * height;
+    return `${x},${y}`;
+  });
+
+  const linePath = `M ${points.join(' L ')}`;
+  const areaPath = `${linePath} L ${width},${height} L 0,${height} Z`;
+
+  return (
+    <div className="continuous-chart-container">
+      <div className="chart-header">
+        <span className="chart-label-text">{label}</span>
+        <span className="chart-value-text" style={{ color }}>{Math.round(data[data.length - 1][dataKey])}%</span>
+      </div>
+      <svg viewBox={`0 0 ${width} ${height}`} className="continuous-svg" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id={`grad-${dataKey}-${color.replace('#', '')}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity="0.4" />
+            <stop offset="100%" stopColor={color} stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        <path d={areaPath} fill={`url(#grad-${dataKey}-${color.replace('#', '')})`} />
+        <path d={linePath} fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        
+        {/* Glow effect line */}
+        <path d={linePath} fill="none" stroke={color} strokeWidth="4" strokeOpacity="0.2" strokeLinecap="round" />
+      </svg>
+    </div>
+  );
+}
+
 function App() {
   const [studentId, setStudentId] = useState('');
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -80,8 +123,10 @@ function App() {
         const updated = { ...prev };
 
         nextMetrics.forEach((metric) => {
+          const incomingMetric = { ...metric, timestamp: Date.now() };
           const existingSeries = updated[metric.jobId] || [];
-          const trimmed = [...existingSeries, metric].slice(-14);
+          // Simpan hingga 30 poin untuk grafik yang lebih halus dan kontinyu
+          const trimmed = [...existingSeries, incomingMetric].slice(-30);
           updated[metric.jobId] = trimmed;
         });
 
@@ -340,29 +385,24 @@ function App() {
             {runningOwnedJobs.map((job) => {
               const series = privateMetrics[job.jobId] || [];
               return (
-                <article key={job.jobId} className="agent-metric-card">
-                  <p className="chart-label chart-title">{job.jobId} • {job.envType}</p>
-                  <p className="chart-label">CPU Usage %</p>
-                  <div className="sparkline-row">
-                    {series.map((point, idx) => (
-                      <div
-                        key={`${job.jobId}-cpu-${idx}`}
-                        className="sparkline-bar cpu"
-                        style={{ height: `${Math.max(8, point.cpuUsage)}%` }}
-                        title={`CPU ${point.cpuUsage}%`}
-                      />
-                    ))}
+                <article key={job.jobId} className="agent-metric-card premium-chart-card">
+                  <div className="agent-info">
+                    <p className="chart-title">{job.jobId} <span className="env-tag">{job.envType}</span></p>
                   </div>
-                  <p className="chart-label mt-small">RAM Usage %</p>
-                  <div className="sparkline-row">
-                    {series.map((point, idx) => (
-                      <div
-                        key={`${job.jobId}-ram-${idx}`}
-                        className="sparkline-bar ram"
-                        style={{ height: `${Math.max(8, point.ramUsage)}%` }}
-                        title={`RAM ${point.ramUsage}%`}
-                      />
-                    ))}
+                  
+                  <div className="charts-stack">
+                    <ContinuousChart 
+                      data={series} 
+                      dataKey="cpuUsage" 
+                      color="#396dff" 
+                      label="CPU LOAD" 
+                    />
+                    <ContinuousChart 
+                      data={series} 
+                      dataKey="ramUsage" 
+                      color="#00d294" 
+                      label="RAM LOAD" 
+                    />
                   </div>
                 </article>
               );
